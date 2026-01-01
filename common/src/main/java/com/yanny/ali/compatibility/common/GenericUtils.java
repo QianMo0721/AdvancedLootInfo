@@ -8,7 +8,6 @@ import com.yanny.ali.api.IDataNode;
 import com.yanny.ali.api.Rect;
 import com.yanny.ali.configuration.AliConfig;
 import com.yanny.ali.manager.AliClientRegistry;
-import com.yanny.ali.manager.AliCommonRegistry;
 import com.yanny.ali.manager.PluginManager;
 import com.yanny.ali.plugin.common.nodes.LootTableNode;
 import com.yanny.ali.plugin.common.trades.TradeNode;
@@ -141,33 +140,25 @@ public class GenericUtils {
         try {
             IClientUtils utils = PluginManager.CLIENT_REGISTRY;
 
-            List<Map.Entry<ResourceLocation, LootData>> lootEntries = readerBuf.readCollection(ArrayList::new, (b) -> {
+            lootData.putAll(readerBuf.readCollection(ArrayList::new, (b) -> {
                 ResourceLocation location = b.readResourceLocation();
                 IDataNode dataNode = utils.getDataNodeFactory(LootTableNode.ID).create(utils, b);
                 List<ItemStack> items = b.readCollection(ArrayList::new, FriendlyByteBuf::readItem);
                 return new AbstractMap.SimpleEntry<>(location, new LootData(dataNode, items));
-            });
+            }).stream().collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)));
 
-            for (Map.Entry<ResourceLocation, LootData> entry : lootEntries) {
-                lootData.put(entry.getKey(), entry.getValue());
-            }
-
-            List<Map.Entry<ResourceLocation, TradeData>> tradeEntries = readerBuf.readCollection(ArrayList::new, (b) -> {
+            tradeData.putAll(readerBuf.readCollection(ArrayList::new, (b) -> {
                 ResourceLocation location = b.readResourceLocation();
                 IDataNode dataNode = utils.getDataNodeFactory(TradeNode.ID).create(utils, b);
-                List<Item> inputs = mapItems(b.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation));
-                List<Item> outputs = mapItems(b.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation));
+                List<Item> inputs = b.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation).stream().map(BuiltInRegistries.ITEM::get).toList();
+                List<Item> outputs = b.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation).stream().map(BuiltInRegistries.ITEM::get).toList();
                 return new AbstractMap.SimpleEntry<>(location, new TradeData(dataNode, inputs, outputs));
-            });
-
-            for (Map.Entry<ResourceLocation, TradeData> entry : tradeEntries) {
-                tradeData.put(entry.getKey(), entry.getValue());
-            }
+            }).stream().collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)));
 
             // wandering trader
             IDataNode dataNode = utils.getDataNodeFactory(TradeNode.ID).create(utils, readerBuf);
-            List<Item> inputs = mapItems(readerBuf.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation));
-            List<Item> outputs = mapItems(readerBuf.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation));
+            List<Item> inputs = readerBuf.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation).stream().map(BuiltInRegistries.ITEM::get).toList();
+            List<Item> outputs = readerBuf.readCollection(ArrayList::new, FriendlyByteBuf::readResourceLocation).stream().map(BuiltInRegistries.ITEM::get).toList();
 
             tradeData.put(new ResourceLocation("empty"), new TradeData(dataNode, inputs, outputs));
         } finally {
@@ -186,43 +177,24 @@ public class GenericUtils {
         Pair<Map<ResourceLocation, LootData>, Map<ResourceLocation, TradeData>> pair = GenericUtils.decompressLootData(fullCompressedData);
         Map<ResourceLocation, LootData> lootData = pair.getA();
         Map<ResourceLocation, TradeData> tradeData = pair.getB();
-        AliCommonRegistry commonRegistry = PluginManager.COMMON_REGISTRY;
 
         for (Block block : BuiltInRegistries.BLOCK) {
             ResourceLocation location = block.getLootTable();
 
             //noinspection ConstantValue
             if (location != null) {
-                LootData data = lootData.remove(location);
+                LootData data = lootData.get(location);
 
                 if (data != null) {
                     blockConsumer.accept(data.node, location, block, data.items);
+                    lootData.remove(location);
                 }
             }
         }
 
-        Set<ResourceLocation> disabledEntities = config.disabledEntities.isEmpty()
-                ? Collections.emptySet()
-                : new HashSet<>(config.disabledEntities);
-
         for (EntityType<?> entityType : BuiltInRegistries.ENTITY_TYPE) {
-            if (disabledEntities.contains(BuiltInRegistries.ENTITY_TYPE.getKey(entityType))) {
+            if (config.disabledEntities.stream().anyMatch((f) -> f.equals(BuiltInRegistries.ENTITY_TYPE.getKey(entityType)))) {
                 lootData.remove(entityType.getDefaultLootTable()); // at least remove entity default loot table
-                continue;
-            }
-
-            if (!commonRegistry.hasEntityVariants(entityType)) {
-                ResourceLocation location = entityType.getDefaultLootTable();
-
-                //noinspection ConstantValue
-                if (location != null) {
-                    LootData data = lootData.remove(location);
-
-                    if (data != null) {
-                        entityConsumer.accept(data.node, location, entityType, data.items);
-                    }
-                }
-
                 continue;
             }
 
@@ -234,11 +206,13 @@ public class GenericUtils {
 
                     //noinspection ConstantValue
                     if (location != null) {
-                        LootData data = lootData.remove(location);
+                        LootData data = lootData.get(location);
 
                         if (data != null) {
                             entityConsumer.accept(data.node, location, entityType, data.items);
                         }
+
+                        lootData.remove(location);
                     }
                 }
             }
@@ -257,11 +231,11 @@ public class GenericUtils {
 
         for (Map.Entry<ResourceKey<VillagerProfession>, VillagerProfession> entry : entries) {
             ResourceLocation location = entry.getKey().location();
-            TradeData tradeEntry = tradeData.remove(location);
+            TradeData tradeEntry = tradeData.get(location);
 
             if (tradeEntry != null) {
-                List<ItemStack> inputs = mapItemStacks(tradeEntry.inputs);
-                List<ItemStack> outputs = mapItemStacks(tradeEntry.outputs);
+                List<ItemStack> inputs = tradeEntry.inputs.stream().map(Item::getDefaultInstance).toList();
+                List<ItemStack> outputs = tradeEntry.outputs.stream().map(Item::getDefaultInstance).toList();
 
                 traderConsumer.accept(tradeEntry.node, location, inputs, outputs);
                 tradeData.remove(location);
@@ -270,11 +244,11 @@ public class GenericUtils {
 
         for (Map.Entry<ResourceLocation, TradeData> entry : tradeData.entrySet()) {
             ResourceLocation location = entry.getKey();
-            TradeData tradeEntry = entry.getValue();
+            TradeData tradeEntry = tradeData.get(location);
 
             if (tradeEntry != null) {
-                List<ItemStack> inputs = mapItemStacks(tradeEntry.inputs);
-                List<ItemStack> outputs = mapItemStacks(tradeEntry.outputs);
+                List<ItemStack> inputs = tradeEntry.inputs.stream().map(Item::getDefaultInstance).toList();
+                List<ItemStack> outputs = tradeEntry.outputs.stream().map(Item::getDefaultInstance).toList();
 
                 wanderingTraderConsumer.accept(tradeEntry.node, location, inputs, outputs);
             }
@@ -299,24 +273,4 @@ public class GenericUtils {
     public record LootData(IDataNode node, List<ItemStack> items) {}
 
     public record TradeData(IDataNode node, List<Item> inputs, List<Item> outputs) {}
-
-    private static List<Item> mapItems(List<ResourceLocation> itemIds) {
-        List<Item> items = new ArrayList<>(itemIds.size());
-
-        for (ResourceLocation id : itemIds) {
-            items.add(BuiltInRegistries.ITEM.get(id));
-        }
-
-        return items;
-    }
-
-    private static List<ItemStack> mapItemStacks(List<Item> items) {
-        List<ItemStack> itemStacks = new ArrayList<>(items.size());
-
-        for (Item item : items) {
-            itemStacks.add(item.getDefaultInstance());
-        }
-
-        return itemStacks;
-    }
 }

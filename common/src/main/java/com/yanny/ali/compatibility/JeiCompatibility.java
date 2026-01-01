@@ -15,6 +15,7 @@ import mezz.jei.api.helpers.IGuiHelper;
 import mezz.jei.api.recipe.RecipeType;
 import mezz.jei.api.registration.IRecipeCategoryRegistration;
 import mezz.jei.api.registration.IRecipeRegistration;
+import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.network.chat.Component;
@@ -27,8 +28,11 @@ import org.slf4j.Logger;
 import java.util.*;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
@@ -40,6 +44,10 @@ public class JeiCompatibility implements IModPlugin {
     private final Map<LootCategory<EntityType<?>>, JeiEntityLoot> entityCategories = new LinkedHashMap<>();
     private final Map<LootCategory<ResourceLocation>, JeiGameplayLoot> gameplayCategories = new LinkedHashMap<>();
     private final Map<LootCategory<ResourceLocation>, JeiTradeLoot> tradeCategories = new LinkedHashMap<>();
+    private final AtomicBoolean recipesRegistered = new AtomicBoolean(false);
+    private final AtomicReference<byte[]> pendingData = new AtomicReference<>();
+    private final AtomicReference<CompletableFuture<byte[]>> deferredFuture = new AtomicReference<>();
+    private volatile IJeiRuntime jeiRuntime;
 
     @Override
     public void onRuntimeUnavailable() {
@@ -47,6 +55,16 @@ public class JeiCompatibility implements IModPlugin {
         entityCategories.clear();
         gameplayCategories.clear();
         tradeCategories.clear();
+        jeiRuntime = null;
+        pendingData.set(null);
+        deferredFuture.set(null);
+        recipesRegistered.set(false);
+    }
+
+    @Override
+    public void onRuntimeAvailable(IJeiRuntime jeiRuntime) {
+        this.jeiRuntime = jeiRuntime;
+        tryRegisterDeferred();
     }
 
     @Override
@@ -74,16 +92,19 @@ public class JeiCompatibility implements IModPlugin {
     public void registerRecipes(IRecipeRegistration registration) {
         CompletableFuture<byte[]> futureData = PluginManager.CLIENT_REGISTRY.getCurrentDataFuture();
 
-        if (futureData.isDone()) {
-            LOGGER.info("Data already received, processing instantly.");
-        } else {
-            LOGGER.info("Blocking this thread until all data are received!");
+        if (!futureData.isDone() || futureData.isCompletedExceptionally() || futureData.isCancelled()) {
+            LOGGER.info("Data not ready, deferring JEI recipe registration.");
+            scheduleDeferredRegistration(futureData);
+            return;
         }
+
+        LOGGER.info("Data already received, processing instantly.");
 
         try {
             byte[] fullCompressedData = futureData.get();
 
-            registerData(registration, fullCompressedData);
+            registerData(registration::addRecipes, fullCompressedData);
+            recipesRegistered.set(true);
             LOGGER.info("Data registration finished successfully.");
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
@@ -103,7 +124,7 @@ public class JeiCompatibility implements IModPlugin {
         }
     }
 
-    private void registerData(IRecipeRegistration registration, byte[] fullCompressedData) {
+    private void registerData(RecipeRegistrar registrar, byte[] fullCompressedData) {
         AliClientRegistry clientRegistry = PluginManager.CLIENT_REGISTRY;
         AliConfig config = PluginManager.COMMON_REGISTRY.getConfiguration();
         ClientLevel level = Minecraft.getInstance().level;
@@ -111,10 +132,10 @@ public class JeiCompatibility implements IModPlugin {
         LOGGER.info("Adding loot information to JEI");
 
         if (level != null) {
-            Map<RecipeType<RecipeHolder<BlockLootType>>, List<RecipeHolder<BlockLootType>>> blockRecipeTypes = new HashMap<>();
-            Map<RecipeType<RecipeHolder<EntityLootType>>, List<RecipeHolder<EntityLootType>>> entityRecipeTypes = new HashMap<>();
-            Map<RecipeType<RecipeHolder<GameplayLootType>>, List<RecipeHolder<GameplayLootType>>> gameplayRecipeTypes = new HashMap<>();
-            Map<RecipeType<RecipeHolder<TradeLootType>>, List<RecipeHolder<TradeLootType>>> tradeRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<BlockLootType>>, List<BlockLootType>> blockRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<EntityLootType>>, List<EntityLootType>> entityRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<GameplayLootType>>, List<GameplayLootType>> gameplayRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<TradeLootType>>, List<TradeLootType>> tradeRecipeTypes = new HashMap<>();
 
             GenericUtils.processData(
                     level,
@@ -136,8 +157,7 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            blockRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
-                                    .add(new RecipeHolder<>(new BlockLootType(block, node, Collections.emptyList(), outputs)));
+                            blockRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new BlockLootType(block, node, Collections.emptyList(), outputs));
                         }
                     },
                     (node, location, entity, outputs) -> {
@@ -155,8 +175,7 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            entityRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
-                                    .add(new RecipeHolder<>(new EntityLootType(entity, location, node, Collections.emptyList(), outputs)));
+                            entityRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new EntityLootType(entity, location, node, Collections.emptyList(), outputs));
                         }
                     },
                     (node, location, outputs) -> {
@@ -174,8 +193,7 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            gameplayRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
-                                    .add(new RecipeHolder<>(new GameplayLootType(node, location, Collections.emptyList(), outputs)));
+                            gameplayRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new GameplayLootType(node, location, Collections.emptyList(), outputs));
                         }
                     },
                     (node, location, inputs, outputs) -> {
@@ -193,8 +211,7 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
-                                    .add(new RecipeHolder<>(new TradeLootType(node, location.getPath(), inputs, outputs)));
+                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new TradeLootType(node, location.getPath(), inputs, outputs));
                         }
                     },
                     (node, location, inputs, outputs) -> {
@@ -212,30 +229,104 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
-                                    .add(new RecipeHolder<>(new TradeLootType(node, location.getPath(), inputs, outputs)));
+                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new TradeLootType(node, location.getPath(), inputs, outputs));
                         }
                     }
             );
 
-            for (Map.Entry<RecipeType<RecipeHolder<BlockLootType>>, List<RecipeHolder<BlockLootType>>> entry : blockRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue());
+            for (Map.Entry<RecipeType<RecipeHolder<BlockLootType>>, List<BlockLootType>> entry : blockRecipeTypes.entrySet()) {
+                registrar.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
             }
 
-            for (Map.Entry<RecipeType<RecipeHolder<EntityLootType>>, List<RecipeHolder<EntityLootType>>> entry : entityRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue());
+            for (Map.Entry<RecipeType<RecipeHolder<EntityLootType>>, List<EntityLootType>> entry : entityRecipeTypes.entrySet()) {
+                registrar.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
             }
 
-            for (Map.Entry<RecipeType<RecipeHolder<GameplayLootType>>, List<RecipeHolder<GameplayLootType>>> entry : gameplayRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue());
+            for (Map.Entry<RecipeType<RecipeHolder<GameplayLootType>>, List<GameplayLootType>> entry : gameplayRecipeTypes.entrySet()) {
+                registrar.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
             }
 
-            for (Map.Entry<RecipeType<RecipeHolder<TradeLootType>>, List<RecipeHolder<TradeLootType>>> entry : tradeRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue());
+            for (Map.Entry<RecipeType<RecipeHolder<TradeLootType>>, List<TradeLootType>> entry : tradeRecipeTypes.entrySet()) {
+                registrar.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
             }
         } else {
             LOGGER.warn("JEI integration was not loaded! Level is null!");
         }
+    }
+
+    private void scheduleDeferredRegistration(CompletableFuture<byte[]> futureData) {
+        if (futureData == null) {
+            return;
+        }
+
+        CompletableFuture<byte[]> previous = deferredFuture.getAndSet(futureData);
+
+        if (previous == futureData) {
+            return;
+        }
+
+        futureData.whenComplete((data, throwable) -> {
+            if (throwable != null) {
+                logRegistrationFailure(throwable);
+                CompletableFuture<byte[]> currentFuture = PluginManager.CLIENT_REGISTRY.getCurrentDataFuture();
+
+                if (!recipesRegistered.get() && currentFuture != futureData) {
+                    scheduleDeferredRegistration(currentFuture);
+                }
+
+                return;
+            }
+
+            pendingData.set(data);
+            tryRegisterDeferred();
+        });
+    }
+
+    private void tryRegisterDeferred() {
+        if (recipesRegistered.get()) {
+            return;
+        }
+
+        IJeiRuntime runtime = this.jeiRuntime;
+        byte[] data = pendingData.get();
+
+        if (runtime == null || data == null) {
+            return;
+        }
+
+        if (!recipesRegistered.compareAndSet(false, true)) {
+            return;
+        }
+
+        Minecraft.getInstance().execute(() -> {
+            try {
+                registerData(runtime.getRecipeManager()::addRecipes, data);
+                pendingData.set(null);
+                LOGGER.info("Data registration finished successfully.");
+            } catch (Throwable e) {
+                recipesRegistered.set(false);
+                logRegistrationFailure(e);
+            }
+        });
+    }
+
+    private void logRegistrationFailure(Throwable throwable) {
+        Throwable cause = throwable instanceof CompletionException && throwable.getCause() != null
+                ? throwable.getCause()
+                : throwable;
+
+        if (cause instanceof TimeoutException || cause instanceof CancellationException) {
+            LOGGER.error("Failed to receive data: Operation aborted or timed out. Registration aborted!");
+        } else if (cause instanceof ExecutionException && cause.getCause() != null) {
+            logRegistrationFailure(cause.getCause());
+        } else {
+            LOGGER.error("Failed to finish registering data with error {}", cause.getMessage());
+            cause.printStackTrace();
+        }
+    }
+
+    private interface RecipeRegistrar {
+        <T extends IType> void addRecipes(RecipeType<RecipeHolder<T>> recipeType, List<RecipeHolder<T>> recipes);
     }
 
     @NotNull

@@ -111,10 +111,10 @@ public class JeiCompatibility implements IModPlugin {
         LOGGER.info("Adding loot information to JEI");
 
         if (level != null) {
-            Map<RecipeType<RecipeHolder<BlockLootType>>, List<BlockLootType>> blockRecipeTypes = new HashMap<>();
-            Map<RecipeType<RecipeHolder<EntityLootType>>, List<EntityLootType>> entityRecipeTypes = new HashMap<>();
-            Map<RecipeType<RecipeHolder<GameplayLootType>>, List<GameplayLootType>> gameplayRecipeTypes = new HashMap<>();
-            Map<RecipeType<RecipeHolder<TradeLootType>>, List<TradeLootType>> tradeRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<BlockLootType>>, List<RecipeHolder<BlockLootType>>> blockRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<EntityLootType>>, List<RecipeHolder<EntityLootType>>> entityRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<GameplayLootType>>, List<RecipeHolder<GameplayLootType>>> gameplayRecipeTypes = new HashMap<>();
+            Map<RecipeType<RecipeHolder<TradeLootType>>, List<RecipeHolder<TradeLootType>>> tradeRecipeTypes = new HashMap<>();
 
             GenericUtils.processData(
                     level,
@@ -136,7 +136,8 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            blockRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new BlockLootType(block, node, Collections.emptyList(), outputs));
+                            blockRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
+                                    .add(new RecipeHolder<>(new BlockLootType(block, node, Collections.emptyList(), outputs)));
                         }
                     },
                     (node, location, entity, outputs) -> {
@@ -154,7 +155,8 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            entityRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new EntityLootType(entity, location, node, Collections.emptyList(), outputs));
+                            entityRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
+                                    .add(new RecipeHolder<>(new EntityLootType(entity, location, node, Collections.emptyList(), outputs)));
                         }
                     },
                     (node, location, outputs) -> {
@@ -172,7 +174,8 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            gameplayRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new GameplayLootType(node, location, Collections.emptyList(), outputs));
+                            gameplayRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
+                                    .add(new RecipeHolder<>(new GameplayLootType(node, location, Collections.emptyList(), outputs)));
                         }
                     },
                     (node, location, inputs, outputs) -> {
@@ -190,7 +193,8 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new TradeLootType(node, location.getPath(), inputs, outputs));
+                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
+                                    .add(new RecipeHolder<>(new TradeLootType(node, location.getPath(), inputs, outputs)));
                         }
                     },
                     (node, location, inputs, outputs) -> {
@@ -208,25 +212,26 @@ public class JeiCompatibility implements IModPlugin {
                         }
 
                         if (recipeType != null) {
-                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new LinkedList<>()).add(new TradeLootType(node, location.getPath(), inputs, outputs));
+                            tradeRecipeTypes.computeIfAbsent(recipeType, (p) -> new ArrayList<>())
+                                    .add(new RecipeHolder<>(new TradeLootType(node, location.getPath(), inputs, outputs)));
                         }
                     }
             );
 
-            for (Map.Entry<RecipeType<RecipeHolder<BlockLootType>>, List<BlockLootType>> entry : blockRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
+            for (Map.Entry<RecipeType<RecipeHolder<BlockLootType>>, List<RecipeHolder<BlockLootType>>> entry : blockRecipeTypes.entrySet()) {
+                registration.addRecipes(entry.getKey(), entry.getValue());
             }
 
-            for (Map.Entry<RecipeType<RecipeHolder<EntityLootType>>, List<EntityLootType>> entry : entityRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
+            for (Map.Entry<RecipeType<RecipeHolder<EntityLootType>>, List<RecipeHolder<EntityLootType>>> entry : entityRecipeTypes.entrySet()) {
+                registration.addRecipes(entry.getKey(), entry.getValue());
             }
 
-            for (Map.Entry<RecipeType<RecipeHolder<GameplayLootType>>, List<GameplayLootType>> entry : gameplayRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
+            for (Map.Entry<RecipeType<RecipeHolder<GameplayLootType>>, List<RecipeHolder<GameplayLootType>>> entry : gameplayRecipeTypes.entrySet()) {
+                registration.addRecipes(entry.getKey(), entry.getValue());
             }
 
-            for (Map.Entry<RecipeType<RecipeHolder<TradeLootType>>, List<TradeLootType>> entry : tradeRecipeTypes.entrySet()) {
-                registration.addRecipes(entry.getKey(), entry.getValue().stream().map(RecipeHolder::new).toList());
+            for (Map.Entry<RecipeType<RecipeHolder<TradeLootType>>, List<RecipeHolder<TradeLootType>>> entry : tradeRecipeTypes.entrySet()) {
+                registration.addRecipes(entry.getKey(), entry.getValue());
             }
         } else {
             LOGGER.warn("JEI integration was not loaded! Level is null!");

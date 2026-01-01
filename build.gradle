@@ -45,8 +45,18 @@ subprojects {
             url = 'https://repo.spongepowered.org/repository/maven-public/'
         }
         maven { // EMI
-            name = "EMI"
-            url = "https://maven.terraformersmc.com/"
+            name = "EMI Releases"
+            url = "https://maven.terraformersmc.com/releases"
+            content {
+                includeGroup "dev.emi"
+            }
+        }
+        maven { // EMI
+            name = "EMI Snapshots"
+            url = "https://maven.terraformersmc.com/snapshots"
+            content {
+                includeGroup "dev.emi"
+            }
         }
         maven {
             name = "JEI"

@@ -8,6 +8,7 @@ import com.yanny.ali.api.IDataNode;
 import com.yanny.ali.api.Rect;
 import com.yanny.ali.configuration.AliConfig;
 import com.yanny.ali.manager.AliClientRegistry;
+import com.yanny.ali.manager.AliCommonRegistry;
 import com.yanny.ali.manager.PluginManager;
 import com.yanny.ali.plugin.common.nodes.LootTableNode;
 import com.yanny.ali.plugin.common.trades.TradeNode;
@@ -185,6 +186,7 @@ public class GenericUtils {
         Pair<Map<ResourceLocation, LootData>, Map<ResourceLocation, TradeData>> pair = GenericUtils.decompressLootData(fullCompressedData);
         Map<ResourceLocation, LootData> lootData = pair.getA();
         Map<ResourceLocation, TradeData> tradeData = pair.getB();
+        AliCommonRegistry commonRegistry = PluginManager.COMMON_REGISTRY;
 
         for (Block block : BuiltInRegistries.BLOCK) {
             ResourceLocation location = block.getLootTable();
@@ -206,6 +208,21 @@ public class GenericUtils {
         for (EntityType<?> entityType : BuiltInRegistries.ENTITY_TYPE) {
             if (disabledEntities.contains(BuiltInRegistries.ENTITY_TYPE.getKey(entityType))) {
                 lootData.remove(entityType.getDefaultLootTable()); // at least remove entity default loot table
+                continue;
+            }
+
+            if (!commonRegistry.hasEntityVariants(entityType)) {
+                ResourceLocation location = entityType.getDefaultLootTable();
+
+                //noinspection ConstantValue
+                if (location != null) {
+                    LootData data = lootData.remove(location);
+
+                    if (data != null) {
+                        entityConsumer.accept(data.node, location, entityType, data.items);
+                    }
+                }
+
                 continue;
             }
 

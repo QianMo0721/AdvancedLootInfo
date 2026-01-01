@@ -59,6 +59,10 @@ public class AliCommonRegistry implements ICommonRegistry, ICommonUtils {
         return configuration;
     }
 
+    public boolean hasEntityVariants(EntityType<?> type) {
+        return entityVariantsMap.containsKey(type);
+    }
+
     public void printRegistrationInfo() {
         LOGGER.info("Registered {} entity variants", entityVariantsMap.size());
     }

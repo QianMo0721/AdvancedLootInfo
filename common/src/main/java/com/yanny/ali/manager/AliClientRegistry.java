@@ -243,11 +243,14 @@ public class AliClientRegistry implements IClientRegistry, IClientUtils {
         private final CompletableFuture<byte[]> dataFuture = new CompletableFuture<>();
         private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         private final AtomicReference<ScheduledFuture<?>> timeoutHandleRef = new AtomicReference<>();
-        private final Map<Integer, byte[]> chunkMap = new HashMap<>();
+        private final int expectedMessageCount;
+        private final byte[][] chunkData;
 
         private final CountDownLatch completionLatch;
 
         public DataReceiver(int expectedMessageCount) {
+            this.expectedMessageCount = expectedMessageCount;
+            this.chunkData = new byte[expectedMessageCount][];
             this.completionLatch = new CountDownLatch(expectedMessageCount);
 
             resetInactivityTimeout();
@@ -272,9 +275,15 @@ public class AliClientRegistry implements IClientRegistry, IClientUtils {
                 return;
             }
 
-            chunkMap.put(index, data);
-            resetInactivityTimeout();
-            completionLatch.countDown();
+            if (index < 0 || index >= expectedMessageCount) {
+                return;
+            }
+
+            if (chunkData[index] == null) {
+                chunkData[index] = data;
+                resetInactivityTimeout();
+                completionLatch.countDown();
+            }
         }
 
         public void forceDone() {
@@ -288,11 +297,22 @@ public class AliClientRegistry implements IClientRegistry, IClientUtils {
         }
 
         private void completeFuture() {
-            int totalCompressedSize = chunkMap.values().stream().mapToInt(a -> a.length).sum();
+            int totalCompressedSize = 0;
+
+            for (byte[] chunk : chunkData) {
+                if (chunk == null) {
+                    dataFuture.completeExceptionally(new IllegalStateException("Missing loot data chunk(s) during assembly."));
+                    shutdownScheduler();
+                    return;
+                }
+
+                totalCompressedSize += chunk.length;
+            }
+
             byte[] fullCompressedData = new byte[totalCompressedSize];
             int offset = 0;
 
-            for (byte[] chunk : chunkMap.values()) {
+            for (byte[] chunk : chunkData) {
                 System.arraycopy(chunk, 0, fullCompressedData, offset, chunk.length);
                 offset += chunk.length;
             }
